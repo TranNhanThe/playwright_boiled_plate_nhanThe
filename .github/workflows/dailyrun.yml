@@ -1,0 +1,21 @@
+name: daily-run-name
+
+on:
+#   schedule:
+#     - cron: "0 16 * * *" # 11PM GMT+7 = 4PM UTC
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  trigger-e2e-jobs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger workflow name
+        run: |
+          curl -L \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/template.yml/dispatches \
+            -d '{"ref":"main","inputs":{"abc_env":"abc.staging","slack_report":"always","use_tuskr":"false","tuskr_run_name":"","custom_command":""}}'

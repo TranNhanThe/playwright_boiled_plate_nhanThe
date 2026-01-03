@@ -1,14 +1,37 @@
 {
-  "name": "playwright_boiled_plate_nhanthe",
+  "name": "playwright_boiled_plate",
   "version": "1.0.0",
-  "description": "Playwright starter pack",
   "main": "index.js",
-  "scripts": {},
+  "scripts": {
+    "test:e2e:all:chromium": "npx playwright test --project=chromium --headed",
+    "show:report":  "npx playwright show-report"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "description": "",
   "devDependencies": {
-    "@playwright/test": "^1.57.0",
-    "@types/node": "^25.0.3"
+    "@eslint/js": "^9.21.0",
+    "@faker-js/faker": "^9.0.0",
+    "@playwright/test": "^1.47.0",
+    "@types/node": "^22.5.4",
+    "allure-playwright": "^3.0.1",
+    "date-format": "^4.0.14",
+    "dotenv": "^16.4.5",
+    "eslint": "^9.21.0",
+    "eslint-config-prettier": "^9.1.0",
+    "globals": "^15.9.0",
+    "imapflow": "^1.0.177",
+    "jwt-decode": "^4.0.0",
+    "playwright-slack-report": "^1.1.86",
+    "prettier": "^3.3.3",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.24.1",
+    "xml2js": "^0.6.2"
+  },
+  "dependencies": {
+    "axios": "^1.8.1",
+    "bignumber.js": "^9.3.1",
+    "typescript-string-operations": "^1.6.1"
   }
 }

@@ -1,0 +1,181 @@
+name: work_flow_name
+on:
+  workflow_dispatch: 
+    inputs:
+      consumer_env:
+        type: choice
+        options:
+          - con.staging 
+        description: "Running test on environment (con.staging)"
+        default: "con.staging"
+        required: true
+      slack_report:
+        type: choice
+        options:
+          - "always"
+          - "on-failure"
+          - "off"
+        default: always
+        description: "Send report to Slack"
+      use_tuskr:
+        type: boolean
+        default: true
+        description: "Push report to Tuskr"
+      tuskr_run_name:
+        description: "Tuskr test run name"
+        default: ""
+        required: false
+      custom_command:
+        description: "Custom command (-g '@tag|case_name')"
+        default: ""
+        required: false
+env:
+  APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+  TUSKR_API_TOKEN: ${{ secrets.TUSKR_API_TOKEN }}
+  SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+  SLACK_OAUTH_TOKEN: ${{ secrets.SLACK_OAUTH_TOKEN }}
+  TUSKR_RUN_NAME: ${{ inputs.tuskr_run_name }}
+  RUNNING_ENV: ${{ inputs.consumer_env }}
+  SLACK_REPORT: ${{ inputs.slack_report }}
+  USE_TUSKR: ${{ inputs.use_tuskr }}
+  CUSTOM_CMD: ${{ inputs.custom_command }}
+  CON_OTP_TOKEN: ${{ secrets.CON_OTP_TOKEN }}
+  SECRET_VERCEL: ${{ secrets.SECRET_VERCEL }}
+  APP_NAME: "T3 Consumer"
+  DISPLAY: ":99"
+  HEADLESS: "false"
+jobs:
+  running-test:
+    runs-on: ubuntu-latest
+    outputs:
+      total_tests: ${{ steps.test_summary.outputs.total_tests }}
+      passed_tests: ${{ steps.test_summary.outputs.passed_tests }}
+      unexpected_tests: ${{ steps.test_summary.outputs.unexpected_tests }}
+      flaky_tests: ${{ steps.test_summary.outputs.flaky_tests }}
+      skipped_tests: ${{ steps.test_summary.outputs.skipped_tests }}
+    strategy:
+      matrix:
+        node-version: [21.x]
+    steps:
+      - name: Set timezone to GMT+7
+        run: echo "TZ=Asia/Ho_Chi_Minh" >> $GITHUB_ENV
+      - uses: actions/checkout@v3
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install required libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          npm install -g tuskr allure-commandline
+          npm install
+          npm run install:chromium
+      - name: Start virtual display (Xvfb)
+        run: |
+          Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
+
+      - name: Prepare environment
+        run: |
+          chmod a+x *.sh
+          ./check_env.sh
+          ./get_mm_ext_12_10_1.sh
+          ./customSlackReport.sh
+      - name: Running tests
+        if: env.CUSTOM_CMD == ''
+        run: |
+          PLAYWRIGHT_JSON_OUTPUT_NAME=results.json npm run test:con:e2e:all:chromium -- -g "@consumer" --workers=1
+        continue-on-error: true
+      - name: Running tests by custom command
+        if: env.CUSTOM_CMD != ''
+        run: |
+          /bin/bash -c "PLAYWRIGHT_JSON_OUTPUT_NAME=results.json npm run test:con:e2e:all:chromium -- ${CUSTOM_CMD}"
+        continue-on-error: true
+      - name: Upload Test Results (Video & Trace)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-evidence-videos 
+          path: test-results/
+          retention-days: 7 
+      - name: Upload Test Results to Trunk.io
+        if: ${{ !cancelled() }}
+        continue-on-error: true 
+        uses: trunk-io/analytics-uploader@main
+        with:
+          junit-paths: "**/*.xml"
+          org-slug: t3test
+          token: ${{ secrets.TRUNK_API_TOKEN }}
+      - name: Analyze test result
+        id: test_summary
+        run: |
+          #install jq to read json file
+          sudo apt-get update && sudo apt-get install -y jq
+
+          #get test result
+          EXPECTED_TESTS=$(jq '.stats.expected' results.json)
+          UNEXPECTED_TESTS=$(jq '.stats.unexpected' results.json)
+          FLAKY_TESTS=$(jq '.stats.flaky' results.json)
+          SKIPPED_TESTS=$(jq '.stats.skipped' results.json)
+          TOTAL_TESTS=$((EXPECTED_TESTS + UNEXPECTED_TESTS + FLAKY_TESTS + SKIPPED_TESTS))
+          PASSED_TESTS=$((TOTAL_TESTS - UNEXPECTED_TESTS - FLAKY_TESTS - SKIPPED_TESTS))
+
+          #set output
+          echo "total_tests=$TOTAL_TESTS" >> $GITHUB_OUTPUT
+          echo "passed_tests=$PASSED_TESTS" >> $GITHUB_OUTPUT
+          echo "unexpected_tests=$UNEXPECTED_TESTS" >> $GITHUB_OUTPUT
+          echo "flaky_tests=$FLAKY_TESTS" >> $GITHUB_OUTPUT
+          echo "skipped_tests=$SKIPPED_TESTS" >> $GITHUB_OUTPUT
+
+          if [ "${UNEXPECTED_TESTS}" -gt 0 -o "${FLAKY_TESTS}" -gt 0 ]; then
+            exit 1
+          fi
+      - name: upload test result to Tuskr
+        if: always() && env.USE_TUSKR == 'true'
+        run: |
+          chmod a+x *.sh
+          ./report-consumer-e2e.sh "${TUSKR_RUN_NAME}"
+      - name: Allure report HTML
+        if: always()
+        run: |
+          npx allure generate --single-file allure-results --clean -o my-custom-report
+      - name: Zip Allure report
+        if: always()
+        run: |
+          zip -r allure-report.zip my-custom-report
+
+      - name: Upload Allure report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: allure-report.zip
+
+      - name: Link to Allure report artifact
+        if: always()
+        run: |
+          echo "🔗 You can download the Allure report (.zip) from this page:"
+
+  slack-notify:
+    needs: running-test
+    runs-on: ubuntu-latest
+    if: always() && (
+      (github.event.inputs.slack_report == 'always' || github.event.inputs.slack_report == 'on-failure')
+      && needs.running-test.result != 'cancelled'
+      )
+    steps:
+      - name: Slack Notify
+        uses: rtCamp/action-slack-notify@v2.3.3
+        env:
+          SLACK_CHANNEL: qa-automation-feeds
+          SLACK_COLOR: ${{ needs.running-test.result }}
+          SLACK_ICON: https://github.com/rtCamp.png?size=48
+          SLACK_MESSAGE: |
+            • 🚀 *Total:* ${{ needs.running-test.outputs.total_tests }}
+            • ✅ *Pass:*  ${{ needs.running-test.outputs.passed_tests }}
+            • 🚨 *Fail:*    ${{ needs.running-test.outputs.unexpected_tests }}
+            • ❄️ *Flaky:* ${{ needs.running-test.outputs.flaky_tests }}
+            • ⏭️ *Skip:*  ${{ needs.running-test.outputs.skipped_tests }}
+          SLACK_TITLE: Playwright Result for T3 Consumer E2E Automation Testing
+          SLACK_USERNAME: Automation Test Result
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
